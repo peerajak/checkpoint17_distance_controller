@@ -50,7 +50,7 @@ public:
         double dphi = std::get<0>(i_th);
         double dx = std::get<1>(i_th);
         double dy = std::get<2>(i_th);
-        cur_ref_phi -= dphi;
+        cur_ref_phi += dphi;
         cur_ref_x += dx;
         cur_ref_y += dy;
         ref_points.push_back(std::make_tuple(cur_ref_phi,cur_ref_x,cur_ref_y));
@@ -58,12 +58,12 @@ public:
     }
 
      //PID parameter    
-    this->Kp = 0.6;
-    this->Ki = 0.0;
-    this->Kd = 0.1;
-    this->Kp_angle = 0.5;
-    this->Ki_angle = 0.0;
-    this->Kd_angle = 0.1;
+    this->Kp = 1;
+    this->Ki = 0.1;
+    this->Kd = 0.0;
+    this->Kp_angle = 1;
+    this->Ki_angle = 0.1;
+    this->Kd_angle = 0.0;
     this->integral_x_pos = 0;
     this->integral_y_pos = 0;
     this->integral_theta = 0;
@@ -97,9 +97,9 @@ private:
     double omega = dtheta_pos/this->dt;
     double vx = dx_pos/this->dt;
     double vy = dy_pos/this->dt;
-    this->integral_x_pos += dx_pos;
-    this->integral_y_pos += dy_pos;
-    this->integral_theta += dtheta_pos;
+    this->integral_x_pos += dx_pos*this->dt;
+    this->integral_y_pos += dy_pos*this->dt;
+    this->integral_theta += dtheta_pos*this->dt;
     double proportion_signal_x = this->Kp*dx_pos;
     double proportion_signal_y = this->Kp*dy_pos;
     double proportion_signal_theta = this->Kp_angle*dtheta_pos;
@@ -329,10 +329,10 @@ void move_robot(geometry_msgs::msg::Twist &msg) {
   double Kp, Ki, Kd, Kp_angle, Ki_angle, Kd_angle, integral_x_pos, integral_y_pos, integral_theta, Hz, dt;
   int hz_inverse_us;   
 
-//   std::list<std::tuple<double, double, double>> waypoints {std::make_tuple(0,1,-1),std::make_tuple(0,1,1),
-//                                 std::make_tuple(0,1,1),std::make_tuple(1.5708, 1, -1),std::make_tuple(-3.1415, -1, -1),
-//                                 std::make_tuple(0.0, -1, 1),std::make_tuple(0.0, -1, 1),std::make_tuple(0.0, -1, -1)};
-std::list<std::tuple<double, double, double>> waypoints {std::make_tuple(1.5708,1,1)};
+  std::list<std::tuple<double, double, double>> waypoints {std::make_tuple(0,1,-1),std::make_tuple(0,1,1),
+                                std::make_tuple(0,1,1),std::make_tuple(1.5708, 1, -1),std::make_tuple(-3.1415, -1, -1),
+                                std::make_tuple(0.0, -1, 1),std::make_tuple(0.0, -1, 1),std::make_tuple(0.0, -1, -1)};
+//std::list<std::tuple<double, double, double>> waypoints {std::make_tuple(1.5708,1,1)};
   std::list<std::tuple<double,double,double>> ref_points;
  
   rclcpp::TimerBase::SharedPtr timer_1_;
