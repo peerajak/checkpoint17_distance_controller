@@ -34,7 +34,8 @@ public:
     rclcpp::SubscriptionOptions options3_odom;
     options3_odom.callback_group = callback_group_3_odom;
     subscription_3_odom = this->create_subscription<nav_msgs::msg::Odometry>(
-        "/rosbot_xl_base_controller/odom", 10,
+    "/odometry/filtered", 10,
+        //"/rosbot_xl_base_controller/odom", 10,
         std::bind(&DistanceController::odom_callback, this,
                   std::placeholders::_1), options3_odom);
 
@@ -55,6 +56,20 @@ public:
         ref_points.push_back(std::make_tuple(cur_ref_phi,cur_ref_x,cur_ref_y));
         RCLCPP_INFO(this->get_logger(), "initialize ref_point phi %f, (x,y) = %f,%f ", cur_ref_phi, cur_ref_x, cur_ref_y);
     }
+
+     //PID parameter    
+    this->Kp = 0.6;
+    this->Ki = 0.0;
+    this->Kd = 0.1;
+    this->Kp_angle = 0.5;
+    this->Ki_angle = 0.0;
+    this->Kd_angle = 0.1;
+    this->integral_x_pos = 0;
+    this->integral_y_pos = 0;
+    this->integral_theta = 0;
+    this->Hz = 10.0;
+    this->dt = 0.1;
+    this->hz_inverse_us = 100000;//10 Hz = 0.1 sec = 100,000 microsec 
   
   }
 
@@ -67,19 +82,99 @@ private:
     //assert(false);
     std::thread{std::bind(&DistanceController::execute, this)}.detach();
   }
+
+  void pid_reset(){
+        this->integral_x_pos = 0;
+        this->integral_y_pos = 0;
+        this->integral_theta = 0;   
+  }
+  // PID FUNCTIONS
+
+  std::tuple<double,double,double> pid_controller(std::tuple<double,double,double> &error_signal){
+    double dtheta_pos = std::get<0>(error_signal); 
+    double dx_pos = std::get<1>(error_signal);
+    double dy_pos = std::get<2>(error_signal);  
+    double omega = dtheta_pos/this->dt;
+    double vx = dx_pos/this->dt;
+    double vy = dy_pos/this->dt;
+    this->integral_x_pos += dx_pos;
+    this->integral_y_pos += dy_pos;
+    this->integral_theta += dtheta_pos;
+    double proportion_signal_x = this->Kp*dx_pos;
+    double proportion_signal_y = this->Kp*dy_pos;
+    double proportion_signal_theta = this->Kp_angle*dtheta_pos;
+    double integral_signal_x = this->Ki*this->integral_x_pos;
+    double integral_signal_y = this->Ki*this->integral_y_pos;
+    double integral_signal_theta = this->Ki_angle*this->integral_theta;
+    double derivative_signal_x = this->Kd * vx;
+    double derivative_signal_y = this->Kd * vy;
+    double derivative_signal_theta = this->Kd_angle * omega;
+    omega = normalize_angle(proportion_signal_theta + integral_signal_theta + derivative_signal_theta);
+    vx = proportion_signal_x + integral_signal_x + derivative_signal_x;
+    vy = proportion_signal_y + integral_signal_y + derivative_signal_y;
+    std::tuple<double, double, double> controller_signal = std::make_tuple(omega, vx, vy);
+    return controller_signal;
+  }
+
+  std::tuple<double,double,double> pid_plant_process(std::tuple<double,double,double> &controller_signal){
+    auto message = std_msgs::msg::Float32MultiArray();
+    double w = std::get<0>(controller_signal);
+    double delta_x = std::get<1>(controller_signal);
+    double delta_y = std::get<2>(controller_signal);
+    MatrixXd vb = velocity2twist(w, delta_x, delta_y);
+    std::vector<float> u_vector = twist2wheels(vb);
+    message.data = u_vector;
+    wheels2ling(message);
+    std::tuple<double, double, double> output_signal = std::make_tuple(current_yaw_rad_,current_pos_.x, current_pos_.y);//(theta_pos,x_pos,y_pos)
+    return output_signal;    
+  }
+
+  std::tuple<double,double,double> pid_error(std::tuple<double,double,double>& output_signal,double xg, double yg, double thetag){
+        double theta_pos = std::get<0>(output_signal);
+        double x_pos = std::get<1>(output_signal);
+        double y_pos = std::get<2>(output_signal);
+        std::tuple<double,double,double> error_signal = std::make_tuple(thetag - theta_pos, xg - x_pos, yg - y_pos);
+        return error_signal;
+  }
+  void pid_simulate_pid(double x_goal, double y_goal, double theta_goal_radian, double tolerance, double angle_tolerance){
+    double theta_goal = normalize_angle(theta_goal_radian);
+    RCLCPP_INFO(get_logger(), "x_goal %f, y_goal %f,theta_goal %f",x_goal,y_goal,theta_goal);
+    std::tuple<double, double, double> output_signal = std::make_tuple(current_yaw_rad_,current_pos_.x, current_pos_.y);//(theta_pos,x_pos,y_pos)
+    double distance_error_norm = 1000; // some large number
+    double error_angle = 1000;//some large number
+
+    while(distance_error_norm > tolerance || error_angle > angle_tolerance){
+        std::tuple<double, double, double> error = pid_error(output_signal, x_goal, y_goal, theta_goal);
+        error_angle= std::get<0>(error); 
+        double error_x= std::get<1>(error);
+        double error_y= std::get<2>(error); 
+        std::tuple<double, double, double> res = pid_controller(error);//(omega, vx, vy)
+        output_signal = pid_plant_process(res);//(theta_pos,x_pos,y_pos)
+        distance_error_norm = sqrt(error_x*error_x+error_y*error_y);
+        RCLCPP_INFO(this->get_logger(), "distance_error_norm= %f, error_angle= %f ", distance_error_norm ,error_angle);
+        usleep(hz_inverse_us);
+    }
+    this->pid_reset();
+
+  }
+
   void execute() {
     auto message = std_msgs::msg::Float32MultiArray();
-    double error_tolerance = 0.01; 
-    //rclcpp::Rate loop_rate(0.01);
+    double distance_error_tolerance = 0.01; 
+    double angle_error_tolerance = 0.1;
+
     while(!ref_points.empty()){
         std::tuple<double,double,double> it2 = ref_points.front();
          RCLCPP_INFO(this->get_logger(), "ref_point (x,y) = %f,%f ", std::get<1>(it2), std::get<2>(it2));
-        double dphi = std::get<0>(it2); 
-        double dx = std::get<1>(it2);
-        double dy = std::get<2>(it2);
-        go_to(dx,dy, dphi, error_tolerance);
+        double thetag = std::get<0>(it2); 
+        double xg = std::get<1>(it2);
+        double yg = std::get<2>(it2);
+        pid_simulate_pid(xg,yg, thetag,  distance_error_tolerance,angle_error_tolerance);
         sleep(1);
-        timer1_counter++;
+        ling.angular.z = 0;
+        ling.linear.x = 0;
+        ling.linear.y = 0;
+        this->move_robot(ling);
         waypoints.pop_front();
         ref_points.pop_front(); 
     }
@@ -101,6 +196,7 @@ private:
     MatrixXd twist = R*v; 
     return twist;
   }
+
  std::vector<float> twist2wheels(MatrixXd twist){
     std::vector<float> u_vector;
 
@@ -158,31 +254,6 @@ private:
     return -100;  
   }
 
-  void go_to(double x_goal, double y_goal, double theta_goal_radian, double tolerance){
-    auto message = std_msgs::msg::Float32MultiArray();
-    double rho = std::numeric_limits<double>::max();
-    double theta_goal = normalize_angle(theta_goal_radian);
-    RCLCPP_INFO(get_logger(), "x_goal %f, y_goal %f,theta_goal %f",x_goal,y_goal,theta_goal);  
-    int hz_inverse_us = 10000;//10 Hz = 0.01 sec = 10000 microsec 
-    while(rho>tolerance){
-        double delta_x = x_goal - current_pos_.x;
-        double delta_y = y_goal - current_pos_.y;
-        rho = sqrt(delta_x*delta_x + delta_y*delta_y);
-        double alpha = 0;
-        double beta  = normalize_angle(-theta_goal - (alpha + current_yaw_rad_));
-        double w = k_alpha*alpha + k_beta*beta;
-        RCLCPP_INFO(get_logger(), "rho %f current_yaw_rad_ %f, beta %f ",rho,current_yaw_rad_,beta);  
-        // positive w is ccw ,negative w is cw
-        RCLCPP_INFO(get_logger(), "theta_goal %f, w %f, delta_x %f, delta_y %f",theta_goal,w,delta_x, delta_y); 
-        ling.angular.z = w;
-        ling.linear.x = delta_x;
-        ling.linear.y = delta_y;
-        this->move_robot(ling);
-        usleep(hz_inverse_us);
-    }
-
-  }
-
 
 
 MatrixXd KinematicLeastSquareNormalEq(MatrixXd & u){
@@ -196,6 +267,27 @@ MatrixXd KinematicLeastSquareNormalEq(MatrixXd & u){
     MatrixXd twist = HTHinv_least_square * u;
     return twist;
 }
+
+  void wheels2ling(const std_msgs::msg::Float32MultiArray msg)
+  {
+    MatrixXd u(4,1);
+    
+     RCLCPP_INFO(this->get_logger(), "wheel_speed topic callback");
+    for(unsigned int i = 0; i < msg.data.size(); i++){
+    u(i,0) = msg.data[i];
+    RCLCPP_INFO(this->get_logger(), "I heard: '%f'",u(i,0));
+    }
+    MatrixXd twist = KinematicLeastSquareNormalEq(u);
+    RCLCPP_INFO(this->get_logger(), "twist wz: %f vx ,%f, vy %f",twist(0,0),twist(1,0),twist(2,0));
+    ling.angular.z = twist(0,0);
+    ling.linear.x = twist(1,0);
+    ling.linear.y = twist(2,0);
+
+    this->move_robot(ling);
+  }
+
+
+
 void move_robot(geometry_msgs::msg::Twist &msg) {
     publisher_1_twist->publish(msg);
 }
@@ -233,14 +325,14 @@ void move_robot(geometry_msgs::msg::Twist &msg) {
   double l = 0.500/2;
   double r = 0.254/2;
   double w = 0.548/2;
-  //------- feedback loop private varibales -------//
-  double k_rho = 0.3;   
-  double k_alpha = 0.8;
-  double k_beta = 1;// -0.15;
-  std::list<std::tuple<double, double, double>> waypoints {std::make_tuple(0,1,-1),std::make_tuple(0,1,1),
-                                std::make_tuple(0,1,1),std::make_tuple(1.5708, 1, -1),std::make_tuple(-3.1415, -1, -1),
-                                std::make_tuple(0.0, -1, 1),std::make_tuple(0.0, -1, 1),std::make_tuple(0.0, -1, -1)};
+  //------- Pid variables -------//
+  double Kp, Ki, Kd, Kp_angle, Ki_angle, Kd_angle, integral_x_pos, integral_y_pos, integral_theta, Hz, dt;
+  int hz_inverse_us;   
 
+//   std::list<std::tuple<double, double, double>> waypoints {std::make_tuple(0,1,-1),std::make_tuple(0,1,1),
+//                                 std::make_tuple(0,1,1),std::make_tuple(1.5708, 1, -1),std::make_tuple(-3.1415, -1, -1),
+//                                 std::make_tuple(0.0, -1, 1),std::make_tuple(0.0, -1, 1),std::make_tuple(0.0, -1, -1)};
+std::list<std::tuple<double, double, double>> waypoints {std::make_tuple(1.5708,1,1)};
   std::list<std::tuple<double,double,double>> ref_points;
  
   rclcpp::TimerBase::SharedPtr timer_1_;
