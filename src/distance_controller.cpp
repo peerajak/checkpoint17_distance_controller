@@ -62,9 +62,9 @@ public:
     }
 
      //PID parameter   best Kp= 1.0 0.1 0.0005  total 3 waypoints elapsed time 10582223, 
-    this->Kp = 1;//std::stod(KP_str);
-    this->Ki = 0.1;//std::stod(KI_str); 
-    this->Kd = 0.005;//std::stod(KD_str);  
+    this->Kp = 1.0;//1//std::stod(KP_str);
+    this->Ki = 0.01;//0.1//std::stod(KI_str); 
+    this->Kd = 0.005;//0.005std::stod(KD_str);  
     this->Kp_angle = 2.0;
     this->Ki_angle = 0.0;
     this->Kd_angle = 0.0;
@@ -137,7 +137,10 @@ private:
         double theta_pos = std::get<0>(output_signal);
         double x_pos = std::get<1>(output_signal);
         double y_pos = std::get<2>(output_signal);
-        std::tuple<double,double,double> error_signal = std::make_tuple(thetag - theta_pos, xg - x_pos, yg - y_pos);
+        double theta_error = thetag - theta_pos;
+        std::tuple<double,double,double> error_signal = std::make_tuple(theta_error, xg - x_pos, yg - y_pos);
+        RCLCPP_INFO(get_logger(), "moving output |Goal_x:%f,Goal_y:%f|thetag:%f|Current_x:%f,Current_y:%f|current_yaw:%f|angular error:%f "
+        ,xg,yg, thetag,x_pos, y_pos, theta_pos, theta_error);
         return error_signal;
   }
   bool pid_simulate_pid(double x_goal, double y_goal, double theta_goal_radian, double tolerance, double angle_tolerance){
@@ -186,6 +189,7 @@ private:
     double angle_error_tolerance = 0.1;
     long int total_elapsed_time = 0;
     bool all_success = true;
+    int w_number = 1;
 
     while(!ref_points.empty()){
         std::tuple<double,double,double> it2 = ref_points.front();
@@ -195,7 +199,7 @@ private:
         double yg = std::get<2>(it2);
         std::string result_pid;
         // Recording the timestamp at the start of the code
-        RCLCPP_INFO(this->get_logger(), "start ref_point (x,y) = %f,%f ", std::get<1>(it2), std::get<2>(it2));
+        RCLCPP_INFO(this->get_logger(), "start move ref_point w%d (x,y) = %f,%f ", w_number, std::get<1>(it2), std::get<2>(it2));
         auto beg = std::chrono::high_resolution_clock::now();
         bool success = pid_simulate_pid(xg,yg, thetag,  distance_error_tolerance,angle_error_tolerance);
         auto end = std::chrono::high_resolution_clock::now();
@@ -212,9 +216,10 @@ private:
         this->move_robot(ling);
         waypoints.pop_front();
         ref_points.pop_front(); 
-        RCLCPP_INFO(this->get_logger(), "end ref_point (x,y) = %f,%f ,%s elasped time %ld", std::get<1>(it2), std::get<2>(it2),result_pid.c_str(),duration.count());
+        RCLCPP_INFO(this->get_logger(), "end move ref_point w%d (x,y) = %f,%f ,%s elasped time %ld", w_number, std::get<1>(it2), std::get<2>(it2),result_pid.c_str(),duration.count());
         total_elapsed_time += duration.count();
-        //sleep(3);
+        w_number++;
+        sleep(1);
     }
     char all_success_char = all_success? 'Y':'N';
     RCLCPP_INFO(get_logger(), "Summary Kp %f, Ki %f, Kd %f total elapsed time %ld, all successes? %c",
@@ -389,9 +394,9 @@ void move_robot(geometry_msgs::msg::Twist &msg) {
 
 int main(int argc, char *argv[]) {
   rclcpp::init(argc, argv);
-  auto eight_trajectory_subscriber = std::make_shared<DistanceController>(argc, argv);
+  auto distance_controller_node = std::make_shared<DistanceController>(argc, argv);
   rclcpp::executors::MultiThreadedExecutor executor;
-  executor.add_node(eight_trajectory_subscriber);
+  executor.add_node(distance_controller_node);
   executor.spin();
 
 
