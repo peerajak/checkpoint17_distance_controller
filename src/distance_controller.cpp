@@ -58,7 +58,7 @@ public:
         cur_ref_x += dx;
         cur_ref_y += dy;
         ref_points.push_back(std::make_tuple(cur_ref_phi,cur_ref_x,cur_ref_y));
-        RCLCPP_INFO(this->get_logger(), "initialize ref_point phi %f, (x,y) = %f,%f ", cur_ref_phi, cur_ref_x, cur_ref_y);
+        RCLCPP_DEBUG(this->get_logger(), "initialize ref_point phi %f, (x,y) = %f,%f ", cur_ref_phi, cur_ref_x, cur_ref_y);
     }
 
      //PID parameter   best Kp= 1.0 0.1 0.0005  total 3 waypoints elapsed time 10582223, 
@@ -73,7 +73,7 @@ public:
     this->hz_inverse_us = 10000;//10 Hz = 0.1 sec = 100,000 microsec 
     this->pid_reset();
      
-    RCLCPP_INFO(this->get_logger(), "KP: %f, KI: %f, KD: %f",this->Kp, this->Ki, this->Kd);
+    RCLCPP_DEBUG(this->get_logger(), "KP: %f, KI: %f, KD: %f",this->Kp, this->Ki, this->Kd);
   }
 
 private:
@@ -139,13 +139,13 @@ private:
         double y_pos = std::get<2>(output_signal);
         double theta_error = thetag - theta_pos;
         std::tuple<double,double,double> error_signal = std::make_tuple(theta_error, xg - x_pos, yg - y_pos);
-        RCLCPP_INFO(get_logger(), "moving output |Goal_x:%f,Goal_y:%f|thetag:%f|Current_x:%f,Current_y:%f|current_yaw:%f|angular error:%f "
+        RCLCPP_DEBUG(get_logger(), "moving output |Goal_x:%f,Goal_y:%f|thetag:%f|Current_x:%f,Current_y:%f|current_yaw:%f|angular error:%f "
         ,xg,yg, thetag,x_pos, y_pos, theta_pos, theta_error);
         return error_signal;
   }
   bool pid_simulate_pid(double x_goal, double y_goal, double theta_goal_radian, double tolerance, double angle_tolerance){
     double theta_goal = normalize_angle(theta_goal_radian);
-    RCLCPP_INFO(get_logger(), "x_goal %f, y_goal %f,theta_goal %f",x_goal,y_goal,theta_goal);
+    RCLCPP_DEBUG(get_logger(), "x_goal %f, y_goal %f,theta_goal %f",x_goal,y_goal,theta_goal);
     std::tuple<double, double, double> output_signal = std::make_tuple(current_yaw_rad_,current_pos_.x, current_pos_.y);//(theta_pos,x_pos,y_pos)
     double distance_error_norm = 1000; // some large number
     double error_angle = 1000;//some large number
@@ -166,14 +166,14 @@ private:
         distance_error_norm = sqrt(error_x*error_x+error_y*error_y);
        
         if( distance_error_norm  <= tolerance){
-            RCLCPP_INFO(this->get_logger(), "distance_error_norm= %f, error_angle= %f, is in tolerence ", distance_error_norm ,error_angle);
+            RCLCPP_DEBUG(this->get_logger(), "distance_error_norm= %f, error_angle= %f, is in tolerence ", distance_error_norm ,error_angle);
             within_tolerance_counter++;
             if(within_tolerance_counter >= 10) {
             is_stabilized_success = true;
             break;
             }
         }else{
-            RCLCPP_INFO(this->get_logger(), "distance_error_norm= %f, error_angle= %f ", distance_error_norm ,error_angle);
+            RCLCPP_DEBUG(this->get_logger(), "distance_error_norm= %f, error_angle= %f ", distance_error_norm ,error_angle);
             within_tolerance_counter = 0;
         }
         usleep(hz_inverse_us);
@@ -199,7 +199,7 @@ private:
         double yg = std::get<2>(it2);
         std::string result_pid;
         // Recording the timestamp at the start of the code
-        RCLCPP_INFO(this->get_logger(), "start move ref_point w%d (x,y) = %f,%f ", w_number, std::get<1>(it2), std::get<2>(it2));
+        RCLCPP_DEBUG(this->get_logger(), "start move ref_point w%d (x,y) = %f,%f ", w_number, std::get<1>(it2), std::get<2>(it2));
         auto beg = std::chrono::high_resolution_clock::now();
         bool success = pid_simulate_pid(xg,yg, thetag,  distance_error_tolerance,angle_error_tolerance);
         auto end = std::chrono::high_resolution_clock::now();
@@ -216,13 +216,13 @@ private:
         this->move_robot(ling);
         waypoints.pop_front();
         ref_points.pop_front(); 
-        RCLCPP_INFO(this->get_logger(), "end move ref_point w%d (x,y) = %f,%f ,%s elasped time %ld", w_number, std::get<1>(it2), std::get<2>(it2),result_pid.c_str(),duration.count());
+        RCLCPP_DEBUG(this->get_logger(), "end move ref_point w%d (x,y) = %f,%f ,%s elasped time %ld", w_number, std::get<1>(it2), std::get<2>(it2),result_pid.c_str(),duration.count());
         total_elapsed_time += duration.count();
         w_number++;
         sleep(1);
     }
     char all_success_char = all_success? 'Y':'N';
-    RCLCPP_INFO(get_logger(), "Summary Kp %f, Ki %f, Kd %f total elapsed time %ld, all successes? %c",
+    RCLCPP_DEBUG(get_logger(), "Summary Kp %f, Ki %f, Kd %f total elapsed time %ld, all successes? %c",
     this->Kp, this->Ki, this->Kd, total_elapsed_time, all_success_char);  
     rclcpp::shutdown();
   }
@@ -323,7 +323,7 @@ MatrixXd KinematicLeastSquareNormalEq(MatrixXd & u){
     RCLCPP_DEBUG(this->get_logger(), "I heard: '%f'",u(i,0));
     }
     MatrixXd twist = KinematicLeastSquareNormalEq(u);
-    RCLCPP_INFO(this->get_logger(), "twist wz: %f vx ,%f, vy %f",twist(0,0),twist(1,0),twist(2,0));
+    RCLCPP_DEBUG(this->get_logger(), "twist wz: %f vx ,%f, vy %f",twist(0,0),twist(1,0),twist(2,0));
     ling.angular.z = twist(0,0);
     ling.linear.x = twist(1,0);
     ling.linear.y = twist(2,0);
